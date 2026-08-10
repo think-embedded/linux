@@ -530,6 +530,9 @@ static void __init map_mem(pgd_t *pgdp)
 	int flags = NO_EXEC_MAPPINGS;
 	u64 i;
 
+	pr_info("map_mem: kernel_start = 0x%pa, kernel_end = 0x%pa\n",
+		&kernel_start, &kernel_end);
+
 	/*
 	 * Setting hierarchical PXNTable attributes on table entries covering
 	 * the linear region is only possible if it is guaranteed that no table
@@ -627,6 +630,8 @@ static void __init map_kernel_segment(pgd_t *pgdp, void *va_start, void *va_end,
 {
 	phys_addr_t pa_start = __pa_symbol(va_start);
 	unsigned long size = va_end - va_start;
+	pr_info("map_kernel_segment: va_start = %p, va_end = %p, prot = %pgprot\n",
+		va_start, va_end, &prot);
 
 	BUG_ON(!PAGE_ALIGNED(pa_start));
 	BUG_ON(!PAGE_ALIGNED(size));
@@ -707,6 +712,8 @@ static void __init map_kernel(pgd_t *pgdp)
 	 * explicitly requested with rodata=off.
 	 */
 	pgprot_t text_prot = rodata_enabled ? PAGE_KERNEL_ROX : PAGE_KERNEL_EXEC;
+
+	pr_info("Mapping kernel code and data\n");
 
 	/*
 	 * If we have a CPU that supports BTI and a kernel built for
@@ -791,20 +798,61 @@ static void __init create_idmap(void)
 	}
 }
 
+void __init arm64_boot_debug_dump_pgd(const char *name, pgd_t *pgdp,
+				      phys_addr_t phys, int limit)
+{
+	int i, dumped = 0;
+
+	pr_info("boot_pgtable: dump %s @ %px phys=%pa\n", name, pgdp, &phys);
+
+	for (i = 0; i < PTRS_PER_PGD && dumped < limit; i++) {
+		u64 val = READ_ONCE(pgd_val(pgdp[i]));
+
+		if (!val)
+			continue;
+
+		pr_info("boot_pgtable:   pgd[%03d] = 0x%016llx\n", i, val);
+		dumped++;
+	}
+
+	if (!dumped)
+		pr_info("boot_pgtable:   <empty>\n");
+}
+
 void __init paging_init(void)
 {
 	pgd_t *pgdp = pgd_set_fixmap(__pa_symbol(swapper_pg_dir));
 	extern pgd_t init_idmap_pg_dir[];
+	phys_addr_t swapper_phys = __pa_symbol(swapper_pg_dir);
+	phys_addr_t init_idmap_phys = __pa_symbol(init_idmap_pg_dir);
+	phys_addr_t init_pg_phys = __pa_symbol(init_pg_dir);
 
 	idmap_t0sz = 63UL - __fls(__pa_symbol(_end) | GENMASK(VA_BITS_MIN - 1, 0));
+	pr_info("paging_init: begin ttbr0_el1=0x%016llx ttbr1_el1=0x%016llx idmap_t0sz=%d\n",
+		read_sysreg(ttbr0_el1), read_sysreg(ttbr1_el1), idmap_t0sz);
+	arm64_boot_debug_dump_pgd("swapper_pg_dir before map_kernel/map_mem",
+				      swapper_pg_dir, swapper_phys, 6);
 
 	map_kernel(pgdp);
+	arm64_boot_debug_dump_pgd("swapper_pg_dir after map_kernel",
+				      swapper_pg_dir, swapper_phys, 10);
 	map_mem(pgdp);
+	arm64_boot_debug_dump_pgd("swapper_pg_dir after map_mem",
+				      swapper_pg_dir, swapper_phys, 12);
 
 	pgd_clear_fixmap();
 
+	pr_info("paging_init: cpu_replace_ttbr1 -> swapper_pg_dir via init_idmap_pg_dir\n");
 	cpu_replace_ttbr1(lm_alias(swapper_pg_dir), init_idmap_pg_dir);
+	pr_info("paging_init: after cpu_replace_ttbr1 ttbr0_el1=0x%016llx ttbr1_el1=0x%016llx\n",
+		read_sysreg(ttbr0_el1), read_sysreg(ttbr1_el1));
 	init_mm.pgd = swapper_pg_dir;
+	pr_info("paging_init: init_mm.pgd=%px swapper_pg_dir=%px\n",
+		init_mm.pgd, swapper_pg_dir);
+	arm64_boot_debug_dump_pgd("init_idmap_pg_dir before recreate",
+				      init_idmap_pg_dir, init_idmap_phys, 6);
+	arm64_boot_debug_dump_pgd("init_pg_dir before memblock_phys_free",
+				      init_pg_dir, init_pg_phys, 8);
 
 	memblock_phys_free(__pa_symbol(init_pg_dir),
 			   __pa_symbol(init_pg_end) - __pa_symbol(init_pg_dir));
@@ -812,6 +860,8 @@ void __init paging_init(void)
 	memblock_allow_resize();
 
 	create_idmap();
+	arm64_boot_debug_dump_pgd("idmap_pg_dir recreated for later cpu_replace_ttbr1 users",
+				      idmap_pg_dir, __pa_symbol(idmap_pg_dir), 6);
 }
 
 #ifdef CONFIG_MEMORY_HOTPLUG

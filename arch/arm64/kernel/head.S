@@ -799,6 +799,15 @@ SYM_FUNC_END(__relocate_kernel)
 SYM_FUNC_START_LOCAL(__primary_switch)
 	adrp	x1, reserved_pg_dir
 	adrp	x2, init_idmap_pg_dir
+	adr_l	x9, arm64_boot_dbg_primary_enable_sctlr
+	str	x0, [x9]
+	adr_l	x9, arm64_boot_dbg_primary_enable_ttbr1_va
+	str	x1, [x9]
+	adr_l	x9, arm64_boot_dbg_primary_enable_ttbr0_va
+	str	x2, [x9]
+	adr_l	x10, arm64_boot_dbg_primary_stage
+	mov	x9, #1
+	str	x9, [x10]
 	bl	__enable_mmu
 #ifdef CONFIG_RELOCATABLE
 	adrp	x23, KERNEL_START

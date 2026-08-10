@@ -843,9 +843,13 @@ static void __init mm_init(void)
 	report_meminit();
 	kmsan_init_shadow();
 	stack_depot_early_init();
+	pr_info("mm_init: entering mem_init()\n");
 	mem_init();
+	pr_info("mm_init: mem_init() complete; buddy allocator is usable\n");
 	mem_init_print_info();
+	pr_info("mm_init: entering kmem_cache_init()\n");
 	kmem_cache_init();
+	pr_info("mm_init: kmem_cache_init() complete; slab allocator is usable\n");
 	/*
 	 * page_owner must be initialized after buddy is ready, and also after
 	 * slab is ready so that stack_depot_init() works properly

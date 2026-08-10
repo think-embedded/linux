@@ -84,6 +84,45 @@ static struct resource mem_res[] = {
  * The recorded values of x0 .. x3 upon kernel entry.
  */
 u64 __cacheline_aligned boot_args[4];
+u64 arm64_boot_dbg_primary_enable_sctlr __initdata = ~0ULL;
+u64 arm64_boot_dbg_primary_enable_ttbr1_va __initdata = ~0ULL;
+u64 arm64_boot_dbg_primary_enable_ttbr0_va __initdata = ~0ULL;
+u64 arm64_boot_dbg_primary_stage __initdata = ~0ULL;
+
+extern pgd_t init_idmap_pg_dir[];
+extern void __init arm64_boot_debug_dump_pgd(const char *name, pgd_t *pgdp,
+					     phys_addr_t phys, int limit);
+
+static void __init arm64_boot_debug_dump_early_tables(void)
+{
+	u64 ttbr0 = read_sysreg(ttbr0_el1);
+	u64 ttbr1 = read_sysreg(ttbr1_el1);
+	phys_addr_t reserved_phys = __pa_symbol(reserved_pg_dir);
+	phys_addr_t init_idmap_phys = __pa_symbol(init_idmap_pg_dir);
+	phys_addr_t init_pg_phys = __pa_symbol(init_pg_dir);
+	phys_addr_t swapper_phys = __pa_symbol(swapper_pg_dir);
+
+	pr_info("boot_pgtable: __primary_switch stage=%llu\n",
+		arm64_boot_dbg_primary_stage);
+	pr_info("boot_pgtable: __enable_mmu sctlr=0x%016llx ttbr1_va=%#llx ttbr0_va=%#llx\n",
+		arm64_boot_dbg_primary_enable_sctlr,
+		arm64_boot_dbg_primary_enable_ttbr1_va,
+		arm64_boot_dbg_primary_enable_ttbr0_va);
+	pr_info("boot_pgtable: symbols reserved_pg_dir=%px phys=%pa init_idmap_pg_dir=%px phys=%pa init_pg_dir=%px phys=%pa swapper_pg_dir=%px phys=%pa\n",
+		reserved_pg_dir, &reserved_phys,
+		init_idmap_pg_dir, &init_idmap_phys,
+		init_pg_dir, &init_pg_phys,
+		swapper_pg_dir, &swapper_phys);
+	pr_info("boot_pgtable: setup_arch entry ttbr0_el1=0x%016llx ttbr1_el1=0x%016llx\n",
+		ttbr0, ttbr1);
+
+	arm64_boot_debug_dump_pgd("reserved_pg_dir (TTBR1 before __enable_mmu)",
+				      reserved_pg_dir, reserved_phys, 6);
+	arm64_boot_debug_dump_pgd("init_idmap_pg_dir (TTBR0 before cpu_uninstall_idmap)",
+				      init_idmap_pg_dir, init_idmap_phys, 6);
+	arm64_boot_debug_dump_pgd("init_pg_dir (TTBR1 after create_kernel_mapping)",
+				      init_pg_dir, init_pg_phys, 8);
+}
 
 void __init smp_setup_processor_id(void)
 {
@@ -323,11 +362,15 @@ void __init __no_sanitize_address setup_arch(char **cmdline_p)
 	 */
 	local_daif_restore(DAIF_PROCCTX_NOIRQ);
 
+	arm64_boot_debug_dump_early_tables();
+
 	/*
 	 * TTBR0 is only used for the identity mapping at this stage. Make it
 	 * point to zero page to avoid speculatively fetching new entries.
 	 */
 	cpu_uninstall_idmap();
+	pr_info("boot_pgtable: after cpu_uninstall_idmap ttbr0_el1=0x%016llx ttbr1_el1=0x%016llx\n",
+		read_sysreg(ttbr0_el1), read_sysreg(ttbr1_el1));
 
 	xen_early_init();
 	efi_init();

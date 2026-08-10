@@ -249,8 +249,12 @@ static void __init zone_sizes_init(void)
 		arm64_dma_phys_limit = dma32_phys_limit;
 #endif
 	max_zone_pfns[ZONE_NORMAL] = max_pfn;
+	pr_info("bootmem_init: zone_sizes_init dma=%lu dma32=%lu normal=%lu max_pfn=%lu\n",
+		max_zone_pfns[ZONE_DMA], max_zone_pfns[ZONE_DMA32],
+		max_zone_pfns[ZONE_NORMAL], max_pfn);
 
 	free_area_init(max_zone_pfns);
+	pr_info("bootmem_init: free_area_init complete, buddy metadata is initialized\n");
 }
 
 int pfn_is_map_memory(unsigned long pfn)
@@ -425,6 +429,8 @@ void __init bootmem_init(void)
 
 	max_pfn = max_low_pfn = max;
 	min_low_pfn = min;
+	pr_info("bootmem_init: min_low_pfn=%#lx max_low_pfn=%#lx max_pfn=%#lx\n",
+		min_low_pfn, max_low_pfn, max_pfn);
 
 	arch_numa_init();
 
@@ -446,6 +452,7 @@ void __init bootmem_init(void)
 	 * done after the fixed reservations
 	 */
 	sparse_init();
+	pr_info("bootmem_init: sparse_init complete\n");
 	zone_sizes_init();
 
 	/*
@@ -461,6 +468,7 @@ void __init bootmem_init(void)
 		reserve_crashkernel();
 
 	memblock_dump_all();
+	pr_info("bootmem_init: complete, memblock reservations are finalized before mem_init()\n");
 }
 
 /*
@@ -470,10 +478,12 @@ void __init bootmem_init(void)
  */
 void __init mem_init(void)
 {
+	pr_info("mem_init: begin, memblock_free_all() will release pages into the buddy allocator\n");
 	swiotlb_init(max_pfn > PFN_DOWN(arm64_dma_phys_limit), SWIOTLB_VERBOSE);
 
 	/* this will put all unused low memory onto the freelists */
 	memblock_free_all();
+	pr_info("mem_init: memblock_free_all complete, buddy allocator now owns ordinary RAM\n");
 
 	/*
 	 * Check boundaries twice: Some fundamental inconsistencies can be
@@ -498,6 +508,7 @@ void __init mem_init(void)
 		 */
 		sysctl_overcommit_memory = OVERCOMMIT_ALWAYS;
 	}
+	pr_info("mem_init: end\n");
 }
 
 void free_initmem(void)
