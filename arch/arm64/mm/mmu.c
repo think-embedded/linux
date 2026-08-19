@@ -630,8 +630,7 @@ static void __init map_kernel_segment(pgd_t *pgdp, void *va_start, void *va_end,
 {
 	phys_addr_t pa_start = __pa_symbol(va_start);
 	unsigned long size = va_end - va_start;
-	pr_info("map_kernel_segment: va_start = %p, va_end = %p, prot = %pgprot\n",
-		va_start, va_end, &prot);
+	phys_addr_t pa_end = pa_start + size;
 
 	BUG_ON(!PAGE_ALIGNED(pa_start));
 	BUG_ON(!PAGE_ALIGNED(size));
@@ -647,6 +646,9 @@ static void __init map_kernel_segment(pgd_t *pgdp, void *va_start, void *va_end,
 	vma->size	= size;
 	vma->flags	= VM_MAP | vm_flags;
 	vma->caller	= __builtin_return_address(0);
+	pr_info("map_kernel_segment: va_start = %px, va_end = %px, prot = %#lx, pa_start: %pa, pa_end: %pa\n",
+		va_start, va_end, (unsigned long)pgprot_val(prot),
+		&pa_start, &pa_end);
 
 	vm_area_add_early(vma);
 }
@@ -813,6 +815,151 @@ void __init arm64_boot_debug_dump_pgd(const char *name, pgd_t *pgdp,
 
 		pr_info("boot_pgtable:   pgd[%03d] = 0x%016llx\n", i, val);
 		dumped++;
+	}
+
+	if (!dumped)
+		pr_info("boot_pgtable:   <empty>\n");
+}
+
+static void __init arm64_boot_debug_dump_pte_table(const char *name, pte_t *ptep,
+					       phys_addr_t phys)
+{
+	int i, dumped = 0;
+
+	pr_info("boot_pgtable:       dump %s @ %px phys=%pa\n", name, ptep, &phys);
+
+	for (i = 0; i < PTRS_PER_PTE; i++) {
+		u64 val = READ_ONCE(pte_val(ptep[i]));
+		phys_addr_t mapped_phys;
+
+		if (!val)
+			continue;
+
+		mapped_phys = __pte_to_phys(ptep[i]);
+		pr_info("boot_pgtable:         pte[%03d] = 0x%016llx -> phys=%pa\n",
+			i, val, &mapped_phys);
+		dumped++;
+	}
+
+	if (!dumped)
+		pr_info("boot_pgtable:         <empty>\n");
+}
+
+static void __init arm64_boot_debug_dump_pmd_table(const char *name, pmd_t *pmdp,
+					       phys_addr_t phys)
+{
+	int i, dumped = 0;
+
+	pr_info("boot_pgtable:     dump %s @ %px phys=%pa\n", name, pmdp, &phys);
+
+	for (i = 0; i < PTRS_PER_PMD; i++) {
+		pmd_t pmd = READ_ONCE(pmdp[i]);
+		u64 val = pmd_val(pmd);
+
+		if (!val)
+			continue;
+
+		pr_info("boot_pgtable:       pmd[%03d] = 0x%016llx\n", i, val);
+		dumped++;
+
+		if (pmd_table(pmd)) {
+			phys_addr_t pte_phys = pmd_page_paddr(pmd);
+			pte_t *ptep = (pte_t *)__phys_to_kimg(pte_phys);
+			char child_name[64];
+
+			snprintf(child_name, sizeof(child_name), "%s pmd[%03d] child pte",
+				 name, i);
+			arm64_boot_debug_dump_pte_table(child_name, ptep, pte_phys);
+			continue;
+		}
+
+		if (pmd_leaf(pmd)) {
+			phys_addr_t mapped_phys = __pmd_to_phys(pmd);
+
+			pr_info("boot_pgtable:         pmd[%03d] is leaf/block -> phys=%pa size=0x%lx\n",
+				i, &mapped_phys, pmd_leaf_size(pmd));
+		}
+	}
+
+	if (!dumped)
+		pr_info("boot_pgtable:       <empty>\n");
+}
+
+static void __init arm64_boot_debug_dump_pud_table(const char *name, pud_t *pudp,
+					       phys_addr_t phys)
+{
+	int i, dumped = 0;
+
+	pr_info("boot_pgtable:   dump %s @ %px phys=%pa\n", name, pudp, &phys);
+
+	for (i = 0; i < PTRS_PER_PUD; i++) {
+		pud_t pud = READ_ONCE(pudp[i]);
+		u64 val = pud_val(pud);
+
+		if (!val)
+			continue;
+
+		pr_info("boot_pgtable:     pud[%03d] = 0x%016llx\n", i, val);
+		dumped++;
+
+		if (pud_table(pud)) {
+			phys_addr_t pmd_phys = pud_page_paddr(pud);
+			pmd_t *pmdp = (pmd_t *)__phys_to_kimg(pmd_phys);
+			char child_name[64];
+
+			snprintf(child_name, sizeof(child_name), "%s pud[%03d] child pmd",
+				 name, i);
+			arm64_boot_debug_dump_pmd_table(child_name, pmdp, pmd_phys);
+			continue;
+		}
+
+		if (pud_leaf(pud)) {
+			phys_addr_t mapped_phys = __pud_to_phys(pud);
+
+			pr_info("boot_pgtable:       pud[%03d] is leaf/block -> phys=%pa\n",
+				i, &mapped_phys);
+		}
+	}
+
+	if (!dumped)
+		pr_info("boot_pgtable:     <empty>\n");
+}
+
+void __init arm64_boot_debug_dump_idmap_walk(const char *name, pgd_t *pgdp,
+					     phys_addr_t phys)
+{
+	int i, dumped = 0;
+
+	pr_info("boot_pgtable: walk %s @ %px phys=%pa\n", name, pgdp, &phys);
+
+	for (i = 0; i < PTRS_PER_PGD; i++) {
+		pgd_t pgd = READ_ONCE(pgdp[i]);
+		u64 val = pgd_val(pgd);
+
+		if (!val)
+			continue;
+
+		pr_info("boot_pgtable:   pgd[%03d] = 0x%016llx\n", i, val);
+		dumped++;
+
+		if (pgd_bad(pgd)) {
+			pr_info("boot_pgtable:     pgd[%03d] is not a table entry\n", i);
+			continue;
+		}
+
+		/*
+		 * In this arm64 4-level build, p4d is folded into pgd, so the
+		 * next real table reached from a PGD entry is a PUD page.
+		 */
+		{
+			phys_addr_t pud_phys = __pgd_to_phys(pgd);
+			pud_t *pudp = (pud_t *)__phys_to_kimg(pud_phys);
+			char child_name[64];
+
+			snprintf(child_name, sizeof(child_name), "%s pgd[%03d] child pud",
+				 name, i);
+			arm64_boot_debug_dump_pud_table(child_name, pudp, pud_phys);
+		}
 	}
 
 	if (!dumped)

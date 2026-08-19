@@ -92,6 +92,8 @@ u64 arm64_boot_dbg_primary_stage __initdata = ~0ULL;
 extern pgd_t init_idmap_pg_dir[];
 extern void __init arm64_boot_debug_dump_pgd(const char *name, pgd_t *pgdp,
 					     phys_addr_t phys, int limit);
+extern void __init arm64_boot_debug_dump_idmap_walk(const char *name, pgd_t *pgdp,
+						    phys_addr_t phys);
 
 static void __init arm64_boot_debug_dump_early_tables(void)
 {
@@ -120,6 +122,8 @@ static void __init arm64_boot_debug_dump_early_tables(void)
 				      reserved_pg_dir, reserved_phys, 6);
 	arm64_boot_debug_dump_pgd("init_idmap_pg_dir (TTBR0 before cpu_uninstall_idmap)",
 				      init_idmap_pg_dir, init_idmap_phys, 6);
+	arm64_boot_debug_dump_idmap_walk("init_idmap_pg_dir detail",
+					 init_idmap_pg_dir, init_idmap_phys);
 	arm64_boot_debug_dump_pgd("init_pg_dir (TTBR1 after create_kernel_mapping)",
 				      init_pg_dir, init_pg_phys, 8);
 }
