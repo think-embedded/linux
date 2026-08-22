@@ -530,7 +530,7 @@ static void __init map_mem(pgd_t *pgdp)
 	int flags = NO_EXEC_MAPPINGS;
 	u64 i;
 
-	pr_info("map_mem: kernel_start = 0x%pa, kernel_end = 0x%pa\n",
+	pr_info("map_mem: kernel_start = %pa, kernel_end = %pa\n",
 		&kernel_start, &kernel_end);
 
 	/*
@@ -565,8 +565,16 @@ static void __init map_mem(pgd_t *pgdp)
 
 	/* map all the memory banks */
 	for_each_mem_range(i, &start, &end) {
+		phys_addr_t size;
+		phys_addr_t end_inclusive;
+
 		if (start >= end)
 			break;
+
+		size = end - start;
+		end_inclusive = end - 1;
+		pr_info("map_mem: memblock.memory[%llu] -> __map_memblock start=%pa end=%pa size=%pa\n",
+			i, &start, &end_inclusive, &size);
 		/*
 		 * The linear map must allow allocation tags reading/writing
 		 * if MTE is present. Otherwise, it has the same attributes as
@@ -821,10 +829,11 @@ void __init arm64_boot_debug_dump_pgd(const char *name, pgd_t *pgdp,
 		pr_info("boot_pgtable:   <empty>\n");
 }
 
-static void __init arm64_boot_debug_dump_pte_table(const char *name, pte_t *ptep,
+static void __init arm64_boot_debug_dump_pte_table(const char *name,
 					       phys_addr_t phys)
 {
 	int i, dumped = 0;
+	pte_t *ptep = pte_set_fixmap(phys);
 
 	pr_info("boot_pgtable:       dump %s @ %px phys=%pa\n", name, ptep, &phys);
 
@@ -843,12 +852,15 @@ static void __init arm64_boot_debug_dump_pte_table(const char *name, pte_t *ptep
 
 	if (!dumped)
 		pr_info("boot_pgtable:         <empty>\n");
+
+	pte_clear_fixmap();
 }
 
-static void __init arm64_boot_debug_dump_pmd_table(const char *name, pmd_t *pmdp,
+static void __init arm64_boot_debug_dump_pmd_table(const char *name,
 					       phys_addr_t phys)
 {
 	int i, dumped = 0;
+	pmd_t *pmdp = pmd_set_fixmap(phys);
 
 	pr_info("boot_pgtable:     dump %s @ %px phys=%pa\n", name, pmdp, &phys);
 
@@ -864,12 +876,11 @@ static void __init arm64_boot_debug_dump_pmd_table(const char *name, pmd_t *pmdp
 
 		if (pmd_table(pmd)) {
 			phys_addr_t pte_phys = pmd_page_paddr(pmd);
-			pte_t *ptep = (pte_t *)__phys_to_kimg(pte_phys);
 			char child_name[64];
 
 			snprintf(child_name, sizeof(child_name), "%s pmd[%03d] child pte",
 				 name, i);
-			arm64_boot_debug_dump_pte_table(child_name, ptep, pte_phys);
+			arm64_boot_debug_dump_pte_table(child_name, pte_phys);
 			continue;
 		}
 
@@ -883,12 +894,15 @@ static void __init arm64_boot_debug_dump_pmd_table(const char *name, pmd_t *pmdp
 
 	if (!dumped)
 		pr_info("boot_pgtable:       <empty>\n");
+
+	pmd_clear_fixmap();
 }
 
-static void __init arm64_boot_debug_dump_pud_table(const char *name, pud_t *pudp,
+static void __init arm64_boot_debug_dump_pud_table(const char *name,
 					       phys_addr_t phys)
 {
 	int i, dumped = 0;
+	pud_t *pudp = pud_set_fixmap(phys);
 
 	pr_info("boot_pgtable:   dump %s @ %px phys=%pa\n", name, pudp, &phys);
 
@@ -904,12 +918,11 @@ static void __init arm64_boot_debug_dump_pud_table(const char *name, pud_t *pudp
 
 		if (pud_table(pud)) {
 			phys_addr_t pmd_phys = pud_page_paddr(pud);
-			pmd_t *pmdp = (pmd_t *)__phys_to_kimg(pmd_phys);
 			char child_name[64];
 
 			snprintf(child_name, sizeof(child_name), "%s pud[%03d] child pmd",
 				 name, i);
-			arm64_boot_debug_dump_pmd_table(child_name, pmdp, pmd_phys);
+			arm64_boot_debug_dump_pmd_table(child_name, pmd_phys);
 			continue;
 		}
 
@@ -923,6 +936,8 @@ static void __init arm64_boot_debug_dump_pud_table(const char *name, pud_t *pudp
 
 	if (!dumped)
 		pr_info("boot_pgtable:     <empty>\n");
+
+	pud_clear_fixmap();
 }
 
 void __init arm64_boot_debug_dump_idmap_walk(const char *name, pgd_t *pgdp,
@@ -953,17 +968,66 @@ void __init arm64_boot_debug_dump_idmap_walk(const char *name, pgd_t *pgdp,
 		 */
 		{
 			phys_addr_t pud_phys = __pgd_to_phys(pgd);
-			pud_t *pudp = (pud_t *)__phys_to_kimg(pud_phys);
 			char child_name[64];
 
 			snprintf(child_name, sizeof(child_name), "%s pgd[%03d] child pud",
 				 name, i);
-			arm64_boot_debug_dump_pud_table(child_name, pudp, pud_phys);
+			arm64_boot_debug_dump_pud_table(child_name, pud_phys);
 		}
 	}
 
 	if (!dumped)
 		pr_info("boot_pgtable:   <empty>\n");
+}
+
+void __init arm64_boot_debug_dump_pgd_entry_walk(const char *name, pgd_t *pgdp,
+						 phys_addr_t phys, int pgd_index)
+{
+	pgd_t pgd;
+	u64 val;
+	u64 va_start;
+	u64 va_end;
+
+	pr_info("boot_pgtable: walk %s @ %px phys=%pa target_pgd=%d\n",
+		name, pgdp, &phys, pgd_index);
+
+	if (pgd_index < 0 || pgd_index >= PTRS_PER_PGD) {
+		pr_info("boot_pgtable:   target_pgd=%d is out of range\n",
+			pgd_index);
+		return;
+	}
+
+	pgd = READ_ONCE(pgdp[pgd_index]);
+	val = pgd_val(pgd);
+	va_start = (u64)pgd_index << PGDIR_SHIFT;
+	va_end = va_start + ((1ULL << PGDIR_SHIFT) - 1);
+
+	pr_info("boot_pgtable:   pgd[%03d] va_range=[0x%016llx-0x%016llx] raw=0x%016llx\n",
+		pgd_index, va_start, va_end, val);
+
+	if (!val) {
+		pr_info("boot_pgtable:   pgd[%03d] is empty\n", pgd_index);
+		return;
+	}
+
+	if (pgd_bad(pgd)) {
+		pr_info("boot_pgtable:   pgd[%03d] is not a table entry\n",
+			pgd_index);
+		return;
+	}
+
+	/*
+	 * In this arm64 4-level build, p4d is folded into pgd, so the
+	 * next real table reached from a PGD entry is a PUD page.
+	 */
+	{
+		phys_addr_t pud_phys = __pgd_to_phys(pgd);
+		char child_name[64];
+
+		snprintf(child_name, sizeof(child_name), "%s pgd[%03d] child pud",
+			 name, pgd_index);
+		arm64_boot_debug_dump_pud_table(child_name, pud_phys);
+	}
 }
 
 void __init paging_init(void)
@@ -986,6 +1050,8 @@ void __init paging_init(void)
 	map_mem(pgdp);
 	arm64_boot_debug_dump_pgd("swapper_pg_dir after map_mem",
 				      swapper_pg_dir, swapper_phys, 12);
+	arm64_boot_debug_dump_pgd_entry_walk("swapper_pg_dir linear map detail after map_mem",
+					     swapper_pg_dir, swapper_phys, 184);
 
 	pgd_clear_fixmap();
 
